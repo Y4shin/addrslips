@@ -1,0 +1,33 @@
+# Rust
+/target/
+Cargo.lock
+
+# Test files and debug output
+test_image.jpg
+test_*.png
+test_*.jpg
+test_*.jpeg
+image_*.jpg
+image_*.png
+*_blurred.jpg
+*_grayscale.jpg
+*_edges.jpg
+*_contours.jpg
+*_circles.jpg
+
+# Debug directories
+debug_output/
+edge_test/
+
+# Nix/direnv
+.direnv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

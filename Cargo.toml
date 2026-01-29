@@ -1,0 +1,10 @@
+[package]
+name = "addrslips"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+image = "0.25"
+imageproc = "0.25"
+anyhow = "1.0"
