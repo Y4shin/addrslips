@@ -8,6 +8,8 @@ use imageproc::rect::Rect;
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::HashMap;
+use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
+use rten::Model;
 
 #[derive(Parser)]
 #[command(name = "addrslips")]
@@ -50,6 +52,14 @@ struct Contour {
     max_x: u32,
     max_y: u32,
     pixel_count: u32,
+}
+
+#[derive(Debug, Clone)]
+struct HouseNumberDetection {
+    number: String,
+    x: u32,
+    y: u32,
+    confidence: f32,
 }
 
 impl Contour {
@@ -145,6 +155,28 @@ impl Contour {
 
     fn is_white(&self, img: &DynamicImage, threshold: f32) -> bool {
         self.average_brightness(img) >= threshold
+    }
+
+    /// Extract the circle region as a sub-image for OCR
+    fn extract_roi(&self, img: &DynamicImage) -> Option<DynamicImage> {
+        // Add padding around the bounding box for better OCR
+        let padding = 5;
+        let x = self.min_x.saturating_sub(padding);
+        let y = self.min_y.saturating_sub(padding);
+        let width = (self.width() + 2 * padding).min(img.width() - x);
+        let height = (self.height() + 2 * padding).min(img.height() - y);
+
+        // Ensure valid dimensions
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        Some(img.crop_imm(x, y, width, height))
+    }
+
+    /// Get center coordinates
+    fn center(&self) -> (u32, u32) {
+        ((self.min_x + self.max_x) / 2, (self.min_y + self.max_y) / 2)
     }
 }
 
@@ -287,6 +319,68 @@ fn save_rgb_image(img: &RgbImage, output_dir: &Path, filename: &str) -> anyhow::
     img.save(&output_path)?;
     println!("Saved debug image: {}", output_path.display());
     Ok(())
+}
+
+/// Initialize OCR engine with models from standard cache location
+fn init_ocr_engine() -> anyhow::Result<OcrEngine> {
+    // Try to load models from standard locations
+    let home_dir = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))?;
+
+    let cache_dir = Path::new(&home_dir).join(".cache/ocrs");
+    let detection_model_path = cache_dir.join("text-detection.rten");
+    let recognition_model_path = cache_dir.join("text-recognition.rten");
+
+    // Check if models exist
+    if !detection_model_path.exists() || !recognition_model_path.exists() {
+        anyhow::bail!(
+            "OCR models not found. Please run: ocrs-cli --help (or download models manually)\n\
+             Expected locations:\n  - {}\n  - {}",
+            detection_model_path.display(),
+            recognition_model_path.display()
+        );
+    }
+
+    // Load models
+    let detection_model = Model::load_file(&detection_model_path)?;
+    let recognition_model = Model::load_file(&recognition_model_path)?;
+
+    // Create engine
+    let engine = OcrEngine::new(OcrEngineParams {
+        detection_model: Some(detection_model),
+        recognition_model: Some(recognition_model),
+        ..Default::default()
+    })?;
+
+    Ok(engine)
+}
+
+/// Recognize house number from a circle ROI
+fn recognize_house_number(
+    engine: &OcrEngine,
+    roi: &DynamicImage,
+) -> Option<(String, f32)> {
+    // Convert to RGB8 format
+    let img = roi.to_rgb8();
+
+    // Prepare image for OCR
+    let img_source = ImageSource::from_bytes(img.as_raw(), img.dimensions()).ok()?;
+    let ocr_input = engine.prepare_input(img_source).ok()?;
+
+    // Run OCR - use simple get_text for straightforward extraction
+    match engine.get_text(&ocr_input) {
+        Ok(text) => {
+            let text = text.trim().to_string();
+            if text.is_empty() {
+                None
+            } else {
+                // For now, we'll use a default confidence since get_text doesn't provide it
+                // In a future phase, we can use the detailed API for per-character confidence
+                Some((text, 0.9))
+            }
+        }
+        Err(_) => None,
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -443,6 +537,66 @@ fn main() -> anyhow::Result<()> {
 
                     println!("\nCircle detection complete! Found {} white circles from {} circular shapes (out of {} total contours).",
                             white_circles.len(), circles.len(), contours.len());
+
+                    // OCR: Read house numbers from white circles
+                    if !white_circles.is_empty() {
+                        if args.verbose {
+                            println!("\nInitializing OCR engine...");
+                        }
+
+                        match init_ocr_engine() {
+                            Ok(ocr_engine) => {
+                                if args.verbose {
+                                    println!("OCR engine initialized successfully");
+                                    println!("\nRunning OCR on {} white circles...", white_circles.len());
+                                }
+
+                                let mut detections: Vec<HouseNumberDetection> = Vec::new();
+
+                                for (i, circle) in white_circles.iter().enumerate() {
+                                    if args.verbose {
+                                        println!("  Processing circle {} of {}...", i + 1, white_circles.len());
+                                    }
+
+                                    // Extract ROI for this circle
+                                    if let Some(roi) = circle.extract_roi(&img) {
+                                        // Run OCR on the ROI
+                                        if let Some((text, confidence)) = recognize_house_number(&ocr_engine, &roi) {
+                                            let (x, y) = circle.center();
+                                            detections.push(HouseNumberDetection {
+                                                number: text.clone(),
+                                                x,
+                                                y,
+                                                confidence,
+                                            });
+
+                                            if args.verbose {
+                                                println!("    Detected: '{}' (confidence: {:.2})", text, confidence);
+                                            }
+                                        } else if args.verbose {
+                                            println!("    No text detected");
+                                        }
+                                    } else if args.verbose {
+                                        println!("    Failed to extract ROI");
+                                    }
+                                }
+
+                                // Print summary
+                                println!("\n=== House Number Detection Results ===");
+                                println!("Total white circles: {}", white_circles.len());
+                                println!("Successfully recognized: {}", detections.len());
+                                println!("\nDetected house numbers:");
+                                for detection in &detections {
+                                    println!("  {} at ({}, {}) - confidence: {:.2}",
+                                            detection.number, detection.x, detection.y, detection.confidence);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to initialize OCR engine: {}", e);
+                                eprintln!("Skipping OCR processing.");
+                            }
+                        }
+                    }
                 }
             }
         }
