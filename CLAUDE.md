@@ -36,45 +36,68 @@ Aktivisti Export → Detection Engine → Structured Data → GUI Application
 
 This output will feed into the future GUI where users can group addresses and generate PDFs.
 
-## Current Status: Phase 6 Complete ✅
+## Current Status: Phases 1-8 Complete ✅
 
-**Phases Completed**: 1, 2, 3, 4, 5, 6
-**Next Phase**: Phase 7 - OCR Integration
+**Phases Completed**: 1-8 (Detection engine with OCR and trait-based pipeline architecture)
+**Next Phase**: Phase 9 - Output formatting (JSON, CSV)
 
-### What Works Now
+### Usage
 
 ```bash
-# Basic image info
+# Run full detection pipeline
 cargo run -- image.png
 
-# Full detection pipeline
-cargo run -- image.png --detect-circles --verbose
+# With verbose output
+cargo run -- image.png --verbose
 
-# Debug all stages
-cargo run -- image.png --debug-preprocess --debug-edges --show-contours --detect-circles
+# Skip OCR (fast circle detection only)
+cargo run -- image.png --skip-ocr --verbose
+
+# With debug mode (saves all intermediate images with lineage tracking)
+cargo run -- image.png --debug-out debug_output
 ```
 
-**Current Detection Results**:
-- Starting contours: 100
-- Filtered circles: 40
-- White circles: 40 (brightness threshold: 200/255)
-- Next step: Read numbers from white circles using OCR
+**Current Detection Results** (on test image):
+- 100 contours detected from edge detection
+- 40 circular shapes found (circularity filter)
+- 40 white circles identified (brightness filter)
+- 32 house numbers successfully recognized with OCR (80% success rate)
 
 ## Architecture
 
 **Pure Rust Stack** - No external system dependencies
 - `image` + `imageproc`: Image processing
+- `ocrs` + `rten`: Pure Rust OCR engine with ONNX runtime
 - `clap`: CLI framework
 - `anyhow`: Error handling
 
-### Detection Pipeline
+### Trait-Based Pipeline Architecture
 
-1. **Preprocessing**: Grayscale conversion → Gaussian blur
-2. **Edge Detection**: Canny edge detector
-3. **Contour Finding**: Connected component labeling
-4. **Circle Filtering**: Circularity + aspect ratio + size
-5. **Color Validation**: Brightness analysis (threshold: 200/255)
-6. **OCR**: (Phase 7-8 - next)
+The detection pipeline uses a composable trait-based architecture where each step implements `PipelineStep`:
+
+```rust
+pub trait PipelineStep: Send + Sync {
+    fn process(&self, data: Vec<PipelineData>, context: &PipelineContext) -> Result<Vec<PipelineData>>;
+    fn name(&self) -> &str;
+}
+```
+
+Steps can:
+- **Transform** (1→1): Convert images (grayscale, blur, edges)
+- **Split** (1→many): Generate multiple outputs (contour detection: 1 image → 100 contours)
+- **Filter** (many→fewer): Remove unwanted items (circle filter: 100 → 40)
+
+### Detection Pipeline (9 Steps)
+
+1. **Grayscale Conversion**: Convert to single-channel grayscale
+2. **Gaussian Blur** (σ=1.5): Reduce noise for edge detection
+3. **Edge Detection**: Canny edge detector (thresholds: 50/100)
+4. **Contour Detection**: Connected component labeling with 10px padding (splits: 1→100)
+5. **Circle Filtering**: Circularity (0.7-2.0) + aspect ratio (0.7-1.4) + radius (10-200px) (filters: 100→40)
+6. **White Circle Filtering**: Brightness threshold (>200/255) (keeps: 40)
+7. **Background Removal**: Circular mask + brightness filter (<150) removes outline
+8. **Upscale**: Resize to 100x100px with aspect ratio preservation
+9. **OCR Recognition**: Pure Rust OCR with `ocrs` (detects: ~32)
 
 ## Incremental Development Plan: Detection Engine Only
 
@@ -93,12 +116,10 @@ The detection engine is being built as a **CLI tool** first. This allows testing
 - ✅ **Phase 4**: Contour detection via connected components
 - ✅ **Phase 5**: Circle filtering (circularity, aspect ratio, size)
 - ✅ **Phase 6**: White circle validation (brightness filtering)
+- ✅ **Phase 7**: OCR integration with `ocrs` (pure Rust)
+- ✅ **Phase 8**: Trait-based pipeline architecture refactor + background removal + upscaling
 
 ### Upcoming Phases
-
-- **Phase 7**: OCR integration with `ocrs` (pure Rust)
-- **Phase 7**: OCR integration with `ocrs` (pure Rust)
-- **Phase 8**: OCR post-processing (error correction)
 - **Phase 9**: Output formatting (JSON, CSV)
 - **Phase 10**: Batch processing with progress bars
 - **Phase 11**: Configuration system (TOML)
@@ -108,17 +129,24 @@ The detection engine is being built as a **CLI tool** first. This allows testing
 
 Full plan: `~/.claude/plans/refactored-wishing-porcupine.md`
 
-## CLI Flags
+## CLI Options
 
 ```
+Usage: addrslips [OPTIONS] <IMAGE>
+
+Arguments:
+  <IMAGE>  Path to input image file
+
 Options:
-  -v, --verbose           Enable verbose output
-      --debug-preprocess  Save preprocessed debug images
-      --debug-edges       Save edge-detected debug images
-      --show-contours     Show all detected contours (red rectangles)
-      --detect-circles    Detect and show circular contours (green circles)
-      --output-dir <DIR>  Output directory for debug images [default: .]
+  -v, --verbose          Enable verbose output
+      --debug-out <DIR>  Save debug outputs to directory (must be empty)
+      --skip-ocr         Skip OCR step (faster, for testing circle detection only)
+  -h, --help             Print help
 ```
+
+**Debug Mode**: When `--debug-out` is provided, the pipeline saves all intermediate images to the specified directory (e.g., `00_input/`, `01_grayscale_conversion/`, etc.), organized by step. The executor uses lineage tracking in filenames (e.g., `01-01-01-15-01.png` shows item came from contour 15).
+
+**Pipeline Execution**: The pipeline uses an MPSC channel-based executor that processes items individually and tracks lineage through the pipeline steps.
 
 ## Files Structure
 
@@ -175,16 +203,17 @@ Running with debug flags creates intermediate images:
 - **Do NOT include Co-Authored-By lines** (no AI attribution in commits)
 - Focus on what was accomplished and why
 
-### To Continue from Phase 6
+### To Continue from Phase 8
 
-Tell Claude: "I'm ready for Phase 7"
+Tell Claude: "I'm ready for Phase 9"
 
-Phase 7 will integrate OCR using the pure Rust `ocrs` crate to read the numbers from the detected white circles.
+Phase 9 will add structured output formatting (JSON and CSV) for integration with other tools.
 
 ## Performance Notes
 
 - Image size: 831x1068 pixels
-- Processing time: <1 second
+- Processing time: ~3 seconds (including OCR)
+- OCR engine: Initialized once and cached in OcrStep for performance
 - Pure Rust compile time: ~10-15 seconds from clean
 - No runtime dependencies needed
 

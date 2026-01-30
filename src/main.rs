@@ -1,15 +1,9 @@
 use clap::Parser;
-use image::{DynamicImage, GrayImage, ImageReader, Luma, Rgb, RgbImage};
-use imageproc::filter::gaussian_blur_f32;
-use imageproc::edges::canny;
-use imageproc::region_labelling::{connected_components, Connectivity};
-use imageproc::drawing::{draw_hollow_rect_mut, draw_hollow_circle_mut};
-use imageproc::rect::Rect;
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::collections::HashMap;
-use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
-use rten::Model;
+use image::ImageReader;
+use std::path::PathBuf;
+
+use addrslips::Pipeline;
+use addrslips::detection::steps::*;
 
 #[derive(Parser)]
 #[command(name = "addrslips")]
@@ -23,364 +17,13 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Save preprocessed debug images
+    /// Save debug outputs to directory (must be empty)
+    #[arg(long, value_name = "DIR")]
+    debug_out: Option<PathBuf>,
+
+    /// Skip OCR step (faster, for testing circle detection only)
     #[arg(long)]
-    debug_preprocess: bool,
-
-    /// Save edge-detected debug images
-    #[arg(long)]
-    debug_edges: bool,
-
-    /// Show detected contours on the image
-    #[arg(long)]
-    show_contours: bool,
-
-    /// Detect and show only circular contours
-    #[arg(long)]
-    detect_circles: bool,
-
-    /// Output directory for debug images
-    #[arg(long, value_name = "DIR", default_value = ".")]
-    output_dir: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-struct Contour {
-    label: u32,
-    min_x: u32,
-    min_y: u32,
-    max_x: u32,
-    max_y: u32,
-    pixel_count: u32,
-}
-
-#[derive(Debug, Clone)]
-struct HouseNumberDetection {
-    number: String,
-    x: u32,
-    y: u32,
-    confidence: f32,
-}
-
-impl Contour {
-    fn width(&self) -> u32 {
-        self.max_x - self.min_x + 1
-    }
-
-    fn height(&self) -> u32 {
-        self.max_y - self.min_y + 1
-    }
-
-    fn area(&self) -> u32 {
-        self.pixel_count
-    }
-
-    fn perimeter(&self) -> f32 {
-        // Approximate perimeter from bounding box
-        2.0 * (self.width() as f32 + self.height() as f32)
-    }
-
-    fn circularity(&self) -> f32 {
-        let perimeter = self.perimeter();
-        // Use bounding box area instead of pixel count for better circularity estimate
-        let area = (self.width() * self.height()) as f32;
-
-        if area == 0.0 {
-            return 0.0;
-        }
-
-        // Circularity = perimeter² / (4π × area)
-        (perimeter * perimeter) / (4.0 * std::f32::consts::PI * area)
-    }
-
-    fn aspect_ratio(&self) -> f32 {
-        let w = self.width() as f32;
-        let h = self.height() as f32;
-        if h == 0.0 {
-            return 0.0;
-        }
-        w / h
-    }
-
-    fn is_circular(&self, threshold: f32) -> bool {
-        let circ = self.circularity();
-        circ >= 0.7 && circ <= threshold
-    }
-
-    fn radius(&self) -> f32 {
-        // Approximate radius from bounding box
-        let w = self.width() as f32;
-        let h = self.height() as f32;
-        (w + h) / 4.0
-    }
-
-    fn is_reasonable_size(&self, min_radius: f32, max_radius: f32) -> bool {
-        let r = self.radius();
-        r >= min_radius && r <= max_radius
-    }
-
-    /// Calculate average brightness of pixels in the circle region
-    fn average_brightness(&self, img: &DynamicImage) -> f32 {
-        let gray = img.to_luma8();
-        let mut sum: u64 = 0;
-        let mut count: u64 = 0;
-
-        let center_x = (self.min_x + self.max_x) / 2;
-        let center_y = (self.min_y + self.max_y) / 2;
-        let radius = self.radius();
-
-        // Sample pixels within the circle
-        for y in self.min_y..=self.max_y {
-            for x in self.min_x..=self.max_x {
-                // Check if pixel is within circle
-                let dx = x as f32 - center_x as f32;
-                let dy = y as f32 - center_y as f32;
-                let distance = (dx * dx + dy * dy).sqrt();
-
-                if distance <= radius {
-                    if x < gray.width() && y < gray.height() {
-                        sum += gray.get_pixel(x, y)[0] as u64;
-                        count += 1;
-                    }
-                }
-            }
-        }
-
-        if count > 0 {
-            sum as f32 / count as f32
-        } else {
-            0.0
-        }
-    }
-
-    fn is_white(&self, img: &DynamicImage, threshold: f32) -> bool {
-        self.average_brightness(img) >= threshold
-    }
-
-    /// Extract the circle region as a sub-image for OCR
-    fn extract_roi(&self, img: &DynamicImage) -> Option<DynamicImage> {
-        // Add padding around the bounding box for better OCR
-        let padding = 5;
-        let x = self.min_x.saturating_sub(padding);
-        let y = self.min_y.saturating_sub(padding);
-        let width = (self.width() + 2 * padding).min(img.width() - x);
-        let height = (self.height() + 2 * padding).min(img.height() - y);
-
-        // Ensure valid dimensions
-        if width == 0 || height == 0 {
-            return None;
-        }
-
-        Some(img.crop_imm(x, y, width, height))
-    }
-
-    /// Get center coordinates
-    fn center(&self) -> (u32, u32) {
-        ((self.min_x + self.max_x) / 2, (self.min_y + self.max_y) / 2)
-    }
-}
-
-/// Convert image to grayscale
-fn to_grayscale(img: &DynamicImage) -> GrayImage {
-    img.to_luma8()
-}
-
-/// Apply Gaussian blur to reduce noise
-fn apply_blur(img: &GrayImage, sigma: f32) -> GrayImage {
-    gaussian_blur_f32(img, sigma)
-}
-
-/// Detect edges using Canny edge detector
-fn detect_edges(img: &GrayImage, low_threshold: f32, high_threshold: f32) -> GrayImage {
-    canny(img, low_threshold, high_threshold)
-}
-
-/// Find contours in binary edge image using connected components
-fn find_contours(edges: &GrayImage, min_area: u32) -> Vec<Contour> {
-    // Label connected components (white pixels = edges)
-    let labeled = connected_components(edges, Connectivity::Eight, Luma([0]));
-
-    // Build contours from labeled regions
-    let mut regions: HashMap<u32, (u32, u32, u32, u32, u32)> = HashMap::new();
-
-    for (x, y, label) in labeled.enumerate_pixels() {
-        let label_val = label[0] as u32;
-        if label_val == 0 {
-            continue; // Skip background
-        }
-
-        regions.entry(label_val)
-            .and_modify(|(min_x, min_y, max_x, max_y, count)| {
-                *min_x = (*min_x).min(x);
-                *min_y = (*min_y).min(y);
-                *max_x = (*max_x).max(x);
-                *max_y = (*max_y).max(y);
-                *count += 1;
-            })
-            .or_insert((x, y, x, y, 1));
-    }
-
-    // Convert to Contour structs and filter by minimum area
-    regions.into_iter()
-        .map(|(label, (min_x, min_y, max_x, max_y, count))| {
-            Contour {
-                label,
-                min_x,
-                min_y,
-                max_x,
-                max_y,
-                pixel_count: count,
-            }
-        })
-        .filter(|c| c.pixel_count >= min_area)
-        .collect()
-}
-
-/// Draw contours on an RGB image
-fn draw_contours(img: &DynamicImage, contours: &[Contour]) -> RgbImage {
-    let mut output = img.to_rgb8();
-    let color = Rgb([255u8, 0u8, 0u8]); // Red
-
-    for contour in contours {
-        let rect = Rect::at(contour.min_x as i32, contour.min_y as i32)
-            .of_size(contour.width(), contour.height());
-        draw_hollow_rect_mut(&mut output, rect, color);
-    }
-
-    output
-}
-
-/// Filter contours to find circular shapes
-fn filter_circles(
-    contours: &[Contour],
-    min_radius: f32,
-    max_radius: f32,
-    circularity_threshold: f32,
-) -> Vec<Contour> {
-    contours
-        .iter()
-        .filter(|c| {
-            let aspect = c.aspect_ratio();
-            c.is_circular(circularity_threshold) &&
-            c.is_reasonable_size(min_radius, max_radius) &&
-            aspect >= 0.7 && aspect <= 1.4  // Roughly square bounding box
-        })
-        .cloned()
-        .collect()
-}
-
-/// Filter circles to keep only white ones
-fn filter_white_circles(
-    circles: &[Contour],
-    img: &DynamicImage,
-    brightness_threshold: f32,
-) -> Vec<Contour> {
-    circles
-        .iter()
-        .filter(|c| c.is_white(img, brightness_threshold))
-        .cloned()
-        .collect()
-}
-
-/// Draw detected circles on an RGB image
-fn draw_circles(img: &DynamicImage, circles: &[Contour]) -> RgbImage {
-    let mut output = img.to_rgb8();
-    let color = Rgb([0u8, 255u8, 0u8]); // Green for circles
-
-    for circle in circles {
-        let center_x = (circle.min_x + circle.max_x) / 2;
-        let center_y = (circle.min_y + circle.max_y) / 2;
-        let radius = circle.radius() as i32;
-
-        draw_hollow_circle_mut(
-            &mut output,
-            (center_x as i32, center_y as i32),
-            radius,
-            color
-        );
-    }
-
-    output
-}
-
-/// Save debug image to specified path
-fn save_debug_image(img: &GrayImage, output_dir: &Path, filename: &str) -> anyhow::Result<()> {
-    fs::create_dir_all(output_dir)?;
-    let output_path = output_dir.join(filename);
-    img.save(&output_path)?;
-    println!("Saved debug image: {}", output_path.display());
-    Ok(())
-}
-
-/// Save RGB debug image
-fn save_rgb_image(img: &RgbImage, output_dir: &Path, filename: &str) -> anyhow::Result<()> {
-    fs::create_dir_all(output_dir)?;
-    let output_path = output_dir.join(filename);
-    img.save(&output_path)?;
-    println!("Saved debug image: {}", output_path.display());
-    Ok(())
-}
-
-/// Initialize OCR engine with models from standard cache location
-fn init_ocr_engine() -> anyhow::Result<OcrEngine> {
-    // Try to load models from standard locations
-    let home_dir = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))?;
-
-    let cache_dir = Path::new(&home_dir).join(".cache/ocrs");
-    let detection_model_path = cache_dir.join("text-detection.rten");
-    let recognition_model_path = cache_dir.join("text-recognition.rten");
-
-    // Check if models exist
-    if !detection_model_path.exists() || !recognition_model_path.exists() {
-        anyhow::bail!(
-            "OCR models not found. Please run: ocrs-cli --help (or download models manually)\n\
-             Expected locations:\n  - {}\n  - {}",
-            detection_model_path.display(),
-            recognition_model_path.display()
-        );
-    }
-
-    // Load models
-    let detection_model = Model::load_file(&detection_model_path)?;
-    let recognition_model = Model::load_file(&recognition_model_path)?;
-
-    // Create engine
-    let engine = OcrEngine::new(OcrEngineParams {
-        detection_model: Some(detection_model),
-        recognition_model: Some(recognition_model),
-        ..Default::default()
-    })?;
-
-    Ok(engine)
-}
-
-/// Recognize house number from a circle ROI
-fn recognize_house_number(
-    engine: &OcrEngine,
-    roi: &DynamicImage,
-) -> Option<(String, f32)> {
-    // Convert to RGB8 format
-    let img = roi.to_rgb8();
-
-    // Prepare image for OCR
-    let img_source = ImageSource::from_bytes(img.as_raw(), img.dimensions()).ok()?;
-    let ocr_input = engine.prepare_input(img_source).ok()?;
-
-    // Run OCR - use simple get_text for straightforward extraction
-    match engine.get_text(&ocr_input) {
-        Ok(text) => {
-            let text = text.trim().to_string();
-            if text.is_empty() {
-                None
-            } else {
-                // For now, we'll use a default confidence since get_text doesn't provide it
-                // In a future phase, we can use the detailed API for per-character confidence
-                Some((text, 0.9))
-            }
-        }
-        Err(_) => None,
-    }
+    skip_ocr: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -392,210 +35,86 @@ fn main() -> anyhow::Result<()> {
 
     // Load image
     let img = ImageReader::open(&args.image_path)?
-        .decode()?;
+        .decode()
+        .map_err(|e| anyhow::anyhow!("Failed to decode image: {}", e))?;
 
-    // Print image information
-    println!("Successfully loaded image:");
-    println!("  Dimensions: {}x{}", img.width(), img.height());
-    println!("  Color type: {:?}", img.color());
+    if args.verbose {
+        println!("Image loaded: {}x{}\n", img.width(), img.height());
+    }
 
-    // Get base filename for output files
-    let base_name = args.image_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
+    // Build pipeline
+    let mut pipeline_builder = Pipeline::new()
+        .with_verbose(args.verbose)
+        .add_step_boxed(Box::new(GrayscaleStep))
+        .add_step_boxed(Box::new(BlurStep { sigma: 1.5 }))
+        .add_step_boxed(Box::new(EdgeDetectionStep {
+            low_threshold: 50.0,
+            high_threshold: 100.0,
+        }))
+        .add_step_boxed(Box::new(ContourDetectionStep {
+            min_area: 10,
+            padding: 10,
+        }))
+        .add_step_boxed(Box::new(CircleFilterStep {
+            min_radius: 10.0,
+            max_radius: 200.0,
+            circularity_threshold: 2.0,
+        }))
+        .add_step_boxed(Box::new(WhiteCircleFilterStep {
+            brightness_threshold: 200.0,
+        }))
+        .add_step_boxed(Box::new(BackgroundRemovalStep))
+        .add_step_boxed(Box::new(UpscaleStep { target_size: 100 }));
+        // Sharpening removed - doesn't seem to improve OCR results
 
-    // Preprocessing pipeline
-    if args.debug_preprocess || args.debug_edges || args.show_contours || args.detect_circles {
-        if args.verbose {
-            println!("\nPreprocessing image...");
-        }
+    // Add OCR step unless skipped
+    if !args.skip_ocr {
+        pipeline_builder = pipeline_builder
+            .add_step_boxed(Box::new(OcrStep::new()));
+    }
 
-        // Convert to grayscale
-        if args.verbose {
-            println!("Converting to grayscale...");
-        }
-        let gray = to_grayscale(&img);
+    // Enable debug mode if requested
+    if let Some(debug_dir) = args.debug_out {
+        pipeline_builder = pipeline_builder.with_debug(debug_dir)?;
+    }
 
-        if args.debug_preprocess {
-            let gray_filename = format!("{}_grayscale.jpg", base_name);
-            save_debug_image(&gray, &args.output_dir, &gray_filename)?;
-        }
+    // Run pipeline with executor (always)
+    if args.verbose {
+        println!("Running pipeline...\n");
+    }
+    let results = pipeline_builder.run_with_executor(img)?;
 
-        // Apply Gaussian blur
-        if args.verbose {
-            println!("Applying Gaussian blur...");
-        }
-        let blurred = apply_blur(&gray, 1.5);
+    // Print results
+    if args.skip_ocr {
+        println!("\n=== White Circle Detection Results ===");
+        println!("Total white circles detected: {}", results.len());
 
-        if args.debug_preprocess {
-            let blur_filename = format!("{}_blurred.jpg", base_name);
-            save_debug_image(&blurred, &args.output_dir, &blur_filename)?;
-        }
-
-        if args.debug_preprocess {
-            println!("\nPreprocessing complete!");
-        }
-
-        // Edge detection
-        if args.debug_edges || args.show_contours || args.detect_circles {
-            if args.verbose {
-                println!("\nDetecting edges...");
-            }
-
-            // Canny edge detection with thresholds
-            let edges = detect_edges(&blurred, 50.0, 100.0);
-
-            if args.debug_edges {
-                let edges_filename = format!("{}_edges.jpg", base_name);
-                save_debug_image(&edges, &args.output_dir, &edges_filename)?;
-            }
-
-            if args.debug_edges && !args.show_contours && !args.detect_circles {
-                println!("\nEdge detection complete!");
-            }
-
-            // Contour detection
-            if args.show_contours || args.detect_circles {
-                if args.verbose {
-                    println!("\nFinding contours...");
+        if !results.is_empty() && args.verbose {
+            println!("\nDetected circles:");
+            for (i, item) in results.iter().enumerate() {
+                if let Some(bbox) = &item.bbox {
+                    let brightness = item.get_float("brightness").unwrap_or(0.0);
+                    println!("  Circle {} at ({}, {}) - brightness: {:.1}",
+                            i + 1, bbox.x, bbox.y, brightness);
                 }
+            }
+        }
+    } else {
+        println!("\n=== House Number Detection Results ===");
+        println!("Total detections: {}", results.len());
 
-                // Find contours with minimum area filter to reduce noise
-                let contours = find_contours(&edges, 10);
-
-                if args.verbose {
-                    println!("Found {} contours", contours.len());
-                }
-
-                // Draw contours on original image
-                if args.show_contours {
-                    if args.verbose {
-                        println!("Drawing contours...");
-                    }
-                    let annotated = draw_contours(&img, &contours);
-                    let contours_filename = format!("{}_contours.jpg", base_name);
-                    save_rgb_image(&annotated, &args.output_dir, &contours_filename)?;
-
-                    println!("\nContour detection complete! Found {} contours.", contours.len());
-                }
-
-                // Circle detection
-                if args.detect_circles {
-                    if args.verbose {
-                        println!("\nFiltering for circular shapes...");
-                        println!("Analyzing contours (showing first 10):");
-                        for (i, contour) in contours.iter().take(10).enumerate() {
-                            println!("  Contour {}: radius={:.1}, circ={:.3}, aspect={:.2}, pixels={}",
-                                    i + 1, contour.radius(), contour.circularity(),
-                                    contour.aspect_ratio(), contour.area());
-                        }
-                    }
-
-                    // Filter for circles with reasonable size and circularity
-                    let circles = filter_circles(&contours, 10.0, 200.0, 2.0);
-
-                    if args.verbose {
-                        println!("Found {} circular shapes (from {} total contours)",
-                                circles.len(), contours.len());
-                    }
-
-                    // Filter for white circles only
-                    if args.verbose {
-                        println!("\nFiltering for white circles...");
-                        // Show brightness values for first few circles
-                        println!("Analyzing brightness (showing first 5):");
-                        for (i, circle) in circles.iter().take(5).enumerate() {
-                            let brightness = circle.average_brightness(&img);
-                            println!("  Circle {}: brightness={:.1}/255", i + 1, brightness);
-                        }
-                    }
-
-                    let white_circles = filter_white_circles(&circles, &img, 200.0);
-
-                    if args.verbose {
-                        println!("Found {} white circles (from {} circular shapes)",
-                                white_circles.len(), circles.len());
-
-                        // Print some example details in verbose mode
-                        if !white_circles.is_empty() {
-                            println!("Example white circles:");
-                            for (i, circle) in white_circles.iter().take(5).enumerate() {
-                                println!("  Circle {}: radius={:.1}, brightness={:.1}",
-                                        i + 1, circle.radius(), circle.average_brightness(&img));
-                            }
-                        }
-                    }
-
-                    // Draw white circles on original image
-                    if args.verbose {
-                        println!("Drawing detected white circles...");
-                    }
-                    let annotated = draw_circles(&img, &white_circles);
-                    let circles_filename = format!("{}_circles.jpg", base_name);
-                    save_rgb_image(&annotated, &args.output_dir, &circles_filename)?;
-
-                    println!("\nCircle detection complete! Found {} white circles from {} circular shapes (out of {} total contours).",
-                            white_circles.len(), circles.len(), contours.len());
-
-                    // OCR: Read house numbers from white circles
-                    if !white_circles.is_empty() {
-                        if args.verbose {
-                            println!("\nInitializing OCR engine...");
-                        }
-
-                        match init_ocr_engine() {
-                            Ok(ocr_engine) => {
-                                if args.verbose {
-                                    println!("OCR engine initialized successfully");
-                                    println!("\nRunning OCR on {} white circles...", white_circles.len());
-                                }
-
-                                let mut detections: Vec<HouseNumberDetection> = Vec::new();
-
-                                for (i, circle) in white_circles.iter().enumerate() {
-                                    if args.verbose {
-                                        println!("  Processing circle {} of {}...", i + 1, white_circles.len());
-                                    }
-
-                                    // Extract ROI for this circle
-                                    if let Some(roi) = circle.extract_roi(&img) {
-                                        // Run OCR on the ROI
-                                        if let Some((text, confidence)) = recognize_house_number(&ocr_engine, &roi) {
-                                            let (x, y) = circle.center();
-                                            detections.push(HouseNumberDetection {
-                                                number: text.clone(),
-                                                x,
-                                                y,
-                                                confidence,
-                                            });
-
-                                            if args.verbose {
-                                                println!("    Detected: '{}' (confidence: {:.2})", text, confidence);
-                                            }
-                                        } else if args.verbose {
-                                            println!("    No text detected");
-                                        }
-                                    } else if args.verbose {
-                                        println!("    Failed to extract ROI");
-                                    }
-                                }
-
-                                // Print summary
-                                println!("\n=== House Number Detection Results ===");
-                                println!("Total white circles: {}", white_circles.len());
-                                println!("Successfully recognized: {}", detections.len());
-                                println!("\nDetected house numbers:");
-                                for detection in &detections {
-                                    println!("  {} at ({}, {}) - confidence: {:.2}",
-                                            detection.number, detection.x, detection.y, detection.confidence);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to initialize OCR engine: {}", e);
-                                eprintln!("Skipping OCR processing.");
-                            }
-                        }
+        if results.is_empty() {
+            println!("No house numbers detected.");
+        } else {
+            println!("\nDetected house numbers:");
+            for item in &results {
+                if let (Some(text), Some(confidence)) = (
+                    item.get_string("ocr_text"),
+                    item.get_float("ocr_confidence")
+                ) {
+                    if let Some(bbox) = &item.bbox {
+                        println!("  {} at ({}, {}) - confidence: {:.2}",
+                                text, bbox.x, bbox.y, confidence);
                     }
                 }
             }
