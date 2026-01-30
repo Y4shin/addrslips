@@ -1,6 +1,5 @@
 # Rust
 /target/
-Cargo.lock
 
 # Test files and debug output
 test_image.jpg
