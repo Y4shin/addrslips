@@ -36,10 +36,10 @@ Aktivisti Export → Detection Engine → Structured Data → GUI Application
 
 This output will feed into the future GUI where users can group addresses and generate PDFs.
 
-## Current Status: Phase 5 Complete ✅
+## Current Status: Phase 6 Complete ✅
 
-**Phases Completed**: 1, 2, 3, 4, 5
-**Next Phase**: Phase 6 - White Circle Validation
+**Phases Completed**: 1, 2, 3, 4, 5, 6
+**Next Phase**: Phase 7 - OCR Integration
 
 ### What Works Now
 
@@ -57,7 +57,8 @@ cargo run -- image.png --debug-preprocess --debug-edges --show-contours --detect
 **Current Detection Results**:
 - Starting contours: 100
 - Filtered circles: 40
-- Next step: Filter to only white circles (~30 expected)
+- White circles: 40 (brightness threshold: 200/255)
+- Next step: Read numbers from white circles using OCR
 
 ## Architecture
 
@@ -72,8 +73,8 @@ cargo run -- image.png --debug-preprocess --debug-edges --show-contours --detect
 2. **Edge Detection**: Canny edge detector
 3. **Contour Finding**: Connected component labeling
 4. **Circle Filtering**: Circularity + aspect ratio + size
-5. **Color Validation**: (Phase 6 - next)
-6. **OCR**: (Phase 7-8 - planned)
+5. **Color Validation**: Brightness analysis (threshold: 200/255)
+6. **OCR**: (Phase 7-8 - next)
 
 ## Incremental Development Plan: Detection Engine Only
 
@@ -91,10 +92,11 @@ The detection engine is being built as a **CLI tool** first. This allows testing
 - ✅ **Phase 3**: Canny edge detection
 - ✅ **Phase 4**: Contour detection via connected components
 - ✅ **Phase 5**: Circle filtering (circularity, aspect ratio, size)
+- ✅ **Phase 6**: White circle validation (brightness filtering)
 
 ### Upcoming Phases
 
-- **Phase 6**: White circle validation (color histogram filtering)
+- **Phase 7**: OCR integration with `ocrs` (pure Rust)
 - **Phase 7**: OCR integration with `ocrs` (pure Rust)
 - **Phase 8**: OCR post-processing (error correction)
 - **Phase 9**: Output formatting (JSON, CSV)
@@ -145,6 +147,7 @@ addrslips/
 2. Aspect ratio: 0.7 - 1.4 (roughly square)
 3. Radius: 10 - 200 pixels
 4. Minimum edge pixels: 10
+5. Brightness: ≥ 200/255 (white circles only)
 
 ### Debug Output
 
@@ -172,11 +175,11 @@ Running with debug flags creates intermediate images:
 - **Do NOT include Co-Authored-By lines** (no AI attribution in commits)
 - Focus on what was accomplished and why
 
-### To Continue from Phase 5
+### To Continue from Phase 6
 
-Tell Claude: "I'm ready for Phase 6"
+Tell Claude: "I'm ready for Phase 7"
 
-Phase 6 will add color histogram analysis to filter the 40 circles down to only white ones (~30 expected).
+Phase 7 will integrate OCR using the pure Rust `ocrs` crate to read the numbers from the detected white circles.
 
 ## Performance Notes
 
@@ -225,8 +228,8 @@ Once the detection engine is complete, these components will be added to build t
 
 **Context**: This represents the typical format exported from Aktivisti - campaign management maps with house numbers marked as white circles. The detection engine needs to:
 1. Identify these white circles (completed in Phase 5)
-2. Filter by color to isolate house numbers (Phase 6)
-3. Read the numbers using OCR (Phases 7-8)
+2. Filter by color to isolate house numbers (completed in Phase 6)
+3. Read the numbers using OCR (Phases 7-8 - next)
 
 **Output**: JSON/CSV with house numbers and their pixel coordinates on the image.
 

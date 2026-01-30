@@ -108,6 +108,44 @@ impl Contour {
         let r = self.radius();
         r >= min_radius && r <= max_radius
     }
+
+    /// Calculate average brightness of pixels in the circle region
+    fn average_brightness(&self, img: &DynamicImage) -> f32 {
+        let gray = img.to_luma8();
+        let mut sum: u64 = 0;
+        let mut count: u64 = 0;
+
+        let center_x = (self.min_x + self.max_x) / 2;
+        let center_y = (self.min_y + self.max_y) / 2;
+        let radius = self.radius();
+
+        // Sample pixels within the circle
+        for y in self.min_y..=self.max_y {
+            for x in self.min_x..=self.max_x {
+                // Check if pixel is within circle
+                let dx = x as f32 - center_x as f32;
+                let dy = y as f32 - center_y as f32;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                if distance <= radius {
+                    if x < gray.width() && y < gray.height() {
+                        sum += gray.get_pixel(x, y)[0] as u64;
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        if count > 0 {
+            sum as f32 / count as f32
+        } else {
+            0.0
+        }
+    }
+
+    fn is_white(&self, img: &DynamicImage, threshold: f32) -> bool {
+        self.average_brightness(img) >= threshold
+    }
 }
 
 /// Convert image to grayscale
@@ -195,6 +233,19 @@ fn filter_circles(
             c.is_reasonable_size(min_radius, max_radius) &&
             aspect >= 0.7 && aspect <= 1.4  // Roughly square bounding box
         })
+        .cloned()
+        .collect()
+}
+
+/// Filter circles to keep only white ones
+fn filter_white_circles(
+    circles: &[Contour],
+    img: &DynamicImage,
+    brightness_threshold: f32,
+) -> Vec<Contour> {
+    circles
+        .iter()
+        .filter(|c| c.is_white(img, brightness_threshold))
         .cloned()
         .collect()
 }
@@ -353,27 +404,45 @@ fn main() -> anyhow::Result<()> {
                     if args.verbose {
                         println!("Found {} circular shapes (from {} total contours)",
                                 circles.len(), contours.len());
+                    }
 
-                        // Print some example circularities in verbose mode
-                        if !circles.is_empty() {
-                            println!("Example circularities:");
-                            for (i, circle) in circles.iter().take(5).enumerate() {
-                                println!("  Circle {}: radius={:.1}, circularity={:.3}",
-                                        i + 1, circle.radius(), circle.circularity());
+                    // Filter for white circles only
+                    if args.verbose {
+                        println!("\nFiltering for white circles...");
+                        // Show brightness values for first few circles
+                        println!("Analyzing brightness (showing first 5):");
+                        for (i, circle) in circles.iter().take(5).enumerate() {
+                            let brightness = circle.average_brightness(&img);
+                            println!("  Circle {}: brightness={:.1}/255", i + 1, brightness);
+                        }
+                    }
+
+                    let white_circles = filter_white_circles(&circles, &img, 200.0);
+
+                    if args.verbose {
+                        println!("Found {} white circles (from {} circular shapes)",
+                                white_circles.len(), circles.len());
+
+                        // Print some example details in verbose mode
+                        if !white_circles.is_empty() {
+                            println!("Example white circles:");
+                            for (i, circle) in white_circles.iter().take(5).enumerate() {
+                                println!("  Circle {}: radius={:.1}, brightness={:.1}",
+                                        i + 1, circle.radius(), circle.average_brightness(&img));
                             }
                         }
                     }
 
-                    // Draw circles on original image
+                    // Draw white circles on original image
                     if args.verbose {
-                        println!("Drawing detected circles...");
+                        println!("Drawing detected white circles...");
                     }
-                    let annotated = draw_circles(&img, &circles);
+                    let annotated = draw_circles(&img, &white_circles);
                     let circles_filename = format!("{}_circles.jpg", base_name);
                     save_rgb_image(&annotated, &args.output_dir, &circles_filename)?;
 
-                    println!("\nCircle detection complete! Found {} circles from {} contours.",
-                            circles.len(), contours.len());
+                    println!("\nCircle detection complete! Found {} white circles from {} circular shapes (out of {} total contours).",
+                            white_circles.len(), circles.len(), contours.len());
                 }
             }
         }
