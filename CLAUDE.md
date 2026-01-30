@@ -12,11 +12,12 @@ A Rust application for political campaign canvassing that detects house numbers 
 3. **Group**: Interactive UI to divide addresses into canvassing groups/routes
 4. **Export**: Generate PDF address slips for each group to print and distribute to canvassers
 
-## Current Focus: Address Detection Engine (Phases 1-14)
+## Development Status
 
-**This repository is currently building ONLY the detection engine** - the computer vision pipeline that finds and reads house numbers from images. The GUI, grouping, and PDF generation features will come later.
+**Detection Engine**: Phases 1-8 Complete ✅
+**GUI Application**: Ready to begin (22-phase plan created)
 
-Think of this as the "backend" that powers the address detection. Once this is solid, we'll build the interactive application around it.
+The detection engine (computer vision pipeline for finding house numbers) is complete and functional. Development is now transitioning to building the full GUI application around it.
 
 ### How the Detection Engine Will Be Used
 
@@ -36,10 +37,20 @@ Aktivisti Export → Detection Engine → Structured Data → GUI Application
 
 This output will feed into the future GUI where users can group addresses and generate PDFs.
 
-## Current Status: Phases 1-8 Complete ✅
+## Current Status
+
+### Detection Engine: Complete ✅
 
 **Phases Completed**: 1-8 (Detection engine with OCR and trait-based pipeline architecture)
-**Next Phase**: Phase 9 - Output formatting (JSON, CSV)
+- Detects white circular house number markers from map images
+- 80% OCR success rate on test images (~32 of 40 circles)
+- Pure Rust implementation with no external dependencies
+
+### GUI Application: Implementation Starting
+
+**Plan**: 22 phases organized in 9 groups (see [docs/plans/gui-implementation.md](docs/plans/gui-implementation.md))
+**Next Phase**: GUI Phase 1 - iced framework setup and basic window
+**Technology**: iced (Rust GUI framework) for cross-platform desktop application
 
 ### Usage
 
@@ -99,14 +110,12 @@ Steps can:
 8. **Upscale**: Resize to 100x100px with aspect ratio preservation
 9. **OCR Recognition**: Pure Rust OCR with `ocrs` (detects: ~32)
 
-## Incremental Development Plan: Detection Engine Only
+## Detection Engine Development (Phases 1-14)
 
-**Current scope**: Phases 1-14 build the computer vision detection engine.
-**Not included**: GUI, grouping, PDF generation (those come after).
+**Status**: Core functionality complete (Phases 1-8)
+**Optional**: Phases 9-14 available for enhancements (JSON output, batch processing, config, testing)
 
-This project is divided into 14 small phases (1-3 hours each). Detailed plans stored in `~/.claude/plans/addrslips/`.
-
-The detection engine is being built as a **CLI tool** first. This allows testing and validation before adding GUI complexity.
+The detection engine was built as a **CLI tool** first to allow testing and validation before GUI integration. This approach is successful - the engine is functional and ready for GUI integration.
 
 ### Completed Phases
 
@@ -152,14 +161,32 @@ Options:
 
 ```
 addrslips/
-├── src/main.rs           # All logic currently in single file
+├── src/
+│   └── main.rs           # All logic currently in single file (will be modularized)
 ├── examples/
 │   └── create_test_image.rs  # Utility to generate test images
+├── docs/
+│   └── plans/
+│       └── gui-implementation.md  # 22-phase GUI development plan
 ├── Cargo.toml            # Dependencies
 ├── flake.nix             # Nix development environment
 ├── image.png             # Test image with white circle house numbers
 └── CLAUDE.md             # This file
 ```
+
+**Future structure** (after GUI implementation):
+```
+addrslips/
+├── src/
+│   ├── main.rs           # Binary entry point (CLI + GUI modes)
+│   ├── lib.rs            # Public API exports
+│   ├── gui/              # GUI application (iced)
+│   ├── core/             # Data model & persistence
+│   ├── pipeline/         # Detection pipeline
+│   └── utils/            # Shared utilities
+```
+
+See [docs/plans/gui-implementation.md](docs/plans/gui-implementation.md) for complete architecture.
 
 ## Key Implementation Details
 
@@ -203,11 +230,22 @@ Running with debug flags creates intermediate images:
 - **Do NOT include Co-Authored-By lines** (no AI attribution in commits)
 - Focus on what was accomplished and why
 
-### To Continue from Phase 8
+### To Continue Development
 
-Tell Claude: "I'm ready for Phase 9"
+**Detection Engine** (optional improvements):
+- Phase 9-14 available for enhancements (JSON output, batch processing, config system, testing)
+- Current engine is functional and can be integrated as-is
 
-Phase 9 will add structured output formatting (JSON and CSV) for integration with other tools.
+**GUI Application** (primary focus):
+```bash
+# Start GUI development:
+"Please implement Phase 1 from docs/plans/gui-implementation.md"
+
+# Or ask Claude:
+"Let's start implementing the GUI according to the plan"
+```
+
+See full implementation plan: [docs/plans/gui-implementation.md](docs/plans/gui-implementation.md)
 
 ## Performance Notes
 
@@ -217,32 +255,47 @@ Phase 9 will add structured output formatting (JSON and CSV) for integration wit
 - Pure Rust compile time: ~10-15 seconds from clean
 - No runtime dependencies needed
 
-## Future Application Components (After Detection Engine)
+## GUI Application Plan
 
-Once the detection engine is complete, these components will be added to build the full application:
+The full application is being built using the iced Rust GUI framework. See detailed implementation plan: [docs/plans/gui-implementation.md](docs/plans/gui-implementation.md)
 
-### Phase Group A: GUI & Interaction (Future)
-- **Map Viewer**: Display Aktivisti export images with detected addresses overlaid
-- **Selection Tools**: Click/drag to select and group addresses
-- **Route Management**: Create, name, and organize canvassing groups
-- **Manual Correction**: Add missed addresses or fix OCR errors
+### Key Features (22 Phases)
 
-### Phase Group B: Data Management (Future)
-- **Address Database**: Store detected addresses with coordinates
-- **Export/Import**: Save and load canvassing projects
-- **Integration**: Import directly from Aktivisti format (if API available)
+**Foundation** (Phases 1-4):
+- Project management with embedded images
+- Area color coding for PDF identification
+- Save/load projects as self-contained `.addrslips` files
 
-### Phase Group C: Output Generation (Future)
-- **PDF Generation**: Create printable address slips per group
-- **Template System**: Customizable slip layouts
-- **Route Optimization**: Suggest efficient canvassing order (optional)
+**Detection Integration** (Phases 5-9):
+- Image canvas widget with zoom/pan
+- Run detection pipeline from GUI
+- Manual address correction and addition
 
-### Additional Enhancements (Long-term)
-- GPU acceleration for faster batch processing
-- ML-based detection improvements
-- Support for non-circular address markers
-- Mobile app for field use
-- Cloud sync for team coordination
+**Street Management** (Phases 10-12):
+- Manual street drawing tool
+- Automatic street detection
+- Street-based address grouping
+
+**Team Assignment** (Phases 13-18):
+- Automatic assignment of addresses to streets
+- Flat count estimation per address
+- Geographic clustering algorithm for team splitting
+- Manual team boundary adjustment
+
+**Export** (Phases 19-20):
+- PDF generation with area color markers
+- Printable address slips sorted by street
+
+**Polish** (Phases 21-22):
+- Error handling and UX improvements
+- Testing and documentation
+
+### Architecture
+
+- **Framework**: iced (Pure Rust, cross-platform)
+- **Data Model**: Project → Areas → Addresses/Streets/Teams
+- **Persistence**: JSON files with embedded images
+- **Binary Size**: ~25-35 MB (release build)
 
 ## Build Information
 
