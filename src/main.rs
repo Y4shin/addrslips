@@ -1,4 +1,5 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use anyhow::Result;
 use image::ImageReader;
 use std::path::PathBuf;
 
@@ -7,44 +8,92 @@ use addrslips::detection::steps::*;
 
 #[derive(Parser)]
 #[command(name = "addrslips")]
-#[command(about = "Detect and read house numbers from images")]
+#[command(about = "Campaign canvassing address management tool")]
 struct Cli {
-    /// Path to input image file
-    #[arg(value_name = "IMAGE")]
-    image_path: PathBuf,
-
-    /// Enable verbose output
-    #[arg(short, long)]
-    verbose: bool,
-
-    /// Save debug outputs to directory (must be empty)
-    #[arg(long, value_name = "DIR")]
-    debug_out: Option<PathBuf>,
-
-    /// Skip OCR step (faster, for testing circle detection only)
-    #[arg(long)]
-    skip_ocr: bool,
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
 
-fn main() -> anyhow::Result<()> {
-    let args = Cli::parse();
+#[derive(Subcommand)]
+enum Commands {
+    /// Launch GUI application
+    Gui,
+    /// Run CLI detection (existing functionality)
+    Detect {
+        /// Path to input image file
+        #[arg(help = "Path to input image file")]
+        image: PathBuf,
+        /// Enable verbose output
+        #[arg(short, long, help = "Enable verbose output")]
+        verbose: bool,
+        /// Save debug outputs to directory
+        #[arg(long, help = "Save debug outputs to directory")]
+        debug_out: Option<PathBuf>,
+        /// Skip OCR step
+        #[arg(long, help = "Skip OCR step")]
+        skip_ocr: bool,
+    },
+}
 
-    if args.verbose {
-        println!("Loading image: {:?}", args.image_path);
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Gui) | None => {
+            // Default to GUI if no command specified
+            #[cfg(feature = "gui")]
+            {
+                gui::run()?;
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                eprintln!("GUI not available in this build");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Detect { image, verbose, debug_out, skip_ocr }) => {
+            run_cli_detection(image, verbose, debug_out, skip_ocr)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "gui")]
+mod gui {
+    use iced::Application;
+    use anyhow::Result;
+
+    pub fn run() -> Result<()> {
+        addrslips::gui::AddrslipsApp::run(iced::Settings::default())
+            .map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;
+        Ok(())
+    }
+}
+
+fn run_cli_detection(
+    image_path: PathBuf,
+    verbose: bool,
+    debug_out: Option<PathBuf>,
+    skip_ocr: bool,
+) -> Result<()> {
+
+    if verbose {
+        println!("Loading image: {:?}", image_path);
     }
 
     // Load image
-    let img = ImageReader::open(&args.image_path)?
+    let img = ImageReader::open(&image_path)?
         .decode()
         .map_err(|e| anyhow::anyhow!("Failed to decode image: {}", e))?;
 
-    if args.verbose {
+    if verbose {
         println!("Image loaded: {}x{}\n", img.width(), img.height());
     }
 
     // Build pipeline
     let mut pipeline_builder = Pipeline::new()
-        .with_verbose(args.verbose)
+        .with_verbose(verbose)
         .add_step_boxed(Box::new(GrayscaleStep))
         .add_step_boxed(Box::new(BlurStep { sigma: 1.5 }))
         .add_step_boxed(Box::new(EdgeDetectionStep {
@@ -68,28 +117,28 @@ fn main() -> anyhow::Result<()> {
         // Sharpening removed - doesn't seem to improve OCR results
 
     // Add OCR step unless skipped
-    if !args.skip_ocr {
+    if !skip_ocr {
         pipeline_builder = pipeline_builder
             .add_step_boxed(Box::new(OcrStep::new()));
     }
 
     // Enable debug mode if requested
-    if let Some(debug_dir) = args.debug_out {
+    if let Some(debug_dir) = debug_out {
         pipeline_builder = pipeline_builder.with_debug(debug_dir)?;
     }
 
     // Run pipeline with executor (always)
-    if args.verbose {
+    if verbose {
         println!("Running pipeline...\n");
     }
     let results = pipeline_builder.run_with_executor(img)?;
 
     // Print results
-    if args.skip_ocr {
+    if skip_ocr {
         println!("\n=== White Circle Detection Results ===");
         println!("Total white circles detected: {}", results.len());
 
-        if !results.is_empty() && args.verbose {
+        if !results.is_empty() && verbose {
             println!("\nDetected circles:");
             for (i, item) in results.iter().enumerate() {
                 if let Some(bbox) = &item.bbox {
