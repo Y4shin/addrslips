@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use image::ImageReader;
 use std::path::PathBuf;
 
@@ -51,7 +51,12 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Detect { image, verbose, debug_out, skip_ocr }) => {
+        Some(Commands::Detect {
+            image,
+            verbose,
+            debug_out,
+            skip_ocr,
+        }) => {
             run_cli_detection(image, verbose, debug_out, skip_ocr)?;
         }
     }
@@ -61,12 +66,22 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "gui")]
 mod gui {
-    use iced::Application;
     use anyhow::Result;
+    use iced::Application;
 
     pub fn run() -> Result<()> {
-        addrslips::gui::AddrslipsApp::run(iced::Settings::default())
-            .map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;
+        use addrslips::gui::AddrslipsApp;
+        iced::application(
+            AddrslipsApp::default,
+            AddrslipsApp::update,
+            AddrslipsApp::view,
+        )
+        .title(AddrslipsApp::title)
+        .theme(AddrslipsApp::theme)
+        .centered()
+        .run()
+        .map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;
+
         Ok(())
     }
 }
@@ -77,7 +92,6 @@ fn run_cli_detection(
     debug_out: Option<PathBuf>,
     skip_ocr: bool,
 ) -> Result<()> {
-
     if verbose {
         println!("Loading image: {:?}", image_path);
     }
@@ -114,12 +128,11 @@ fn run_cli_detection(
         }))
         .add_step_boxed(Box::new(BackgroundRemovalStep))
         .add_step_boxed(Box::new(UpscaleStep { target_size: 100 }));
-        // Sharpening removed - doesn't seem to improve OCR results
+    // Sharpening removed - doesn't seem to improve OCR results
 
     // Add OCR step unless skipped
     if !skip_ocr {
-        pipeline_builder = pipeline_builder
-            .add_step_boxed(Box::new(OcrStep::new()));
+        pipeline_builder = pipeline_builder.add_step_boxed(Box::new(OcrStep::new()));
     }
 
     // Enable debug mode if requested
@@ -143,8 +156,13 @@ fn run_cli_detection(
             for (i, item) in results.iter().enumerate() {
                 if let Some(bbox) = &item.bbox {
                     let brightness = item.get_float("brightness").unwrap_or(0.0);
-                    println!("  Circle {} at ({}, {}) - brightness: {:.1}",
-                            i + 1, bbox.x, bbox.y, brightness);
+                    println!(
+                        "  Circle {} at ({}, {}) - brightness: {:.1}",
+                        i + 1,
+                        bbox.x,
+                        bbox.y,
+                        brightness
+                    );
                 }
             }
         }
@@ -159,11 +177,13 @@ fn run_cli_detection(
             for item in &results {
                 if let (Some(text), Some(confidence)) = (
                     item.get_string("ocr_text"),
-                    item.get_float("ocr_confidence")
+                    item.get_float("ocr_confidence"),
                 ) {
                     if let Some(bbox) = &item.bbox {
-                        println!("  {} at ({}, {}) - confidence: {:.2}",
-                                text, bbox.x, bbox.y, confidence);
+                        println!(
+                            "  {} at ({}, {}) - confidence: {:.2}",
+                            text, bbox.x, bbox.y, confidence
+                        );
                     }
                 }
             }

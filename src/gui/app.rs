@@ -1,54 +1,48 @@
-use iced::{Application, Command, Element, Theme};
-use iced::widget::{column, container, text};
-use super::{Message, AppState};
+use crate::gui::screens::{Screen, ScreenData, ScreenMessage};
+use iced::{Element, Task, Theme, application};
+
+use super::{AppState, Message};
 
 pub struct AddrslipsApp {
     state: AppState,
+    screen: ScreenData,
 }
+/*type Executor = iced::executor::Default;
+type Message = Message;
+type Theme = Theme;
+type Flags = ();*/
 
-impl Application for AddrslipsApp {
-    type Executor = iced::executor::Default;
-    type Message = Message;
-    type Theme = Theme;
-    type Flags = ();
-
-    fn new(_flags: ()) -> (Self, Command<Message>) {
-        (
-            Self {
-                state: AppState::default(),
-            },
-            Command::none(),
-        )
-    }
-
-    fn title(&self) -> String {
+impl AddrslipsApp {
+    pub fn title(&self) -> String {
         "Addrslips - Campaign Canvassing Tool".to_string()
     }
 
-    fn update(&mut self, message: Message) -> Command<Message> {
-        match message {
-            Message::None => Command::none(),
-        }
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        self.screen
+            .update(message, &mut self.state)
+            .map(|msg| match msg {
+                ScreenMessage::ScreenMessage(msg) => msg,
+                ScreenMessage::ParentMessage(_) => unreachable!(),
+            })
     }
 
-    fn view(&self) -> Element<Message> {
-        let content = column![
-            text("Addrslips").size(32),
-            text("Campaign Canvassing Address Management"),
-            text("GUI coming soon!"),
-        ]
-        .spacing(20)
-        .padding(20);
-
-        container(content)
-            .width(iced::Length::Fill)
-            .height(iced::Length::Fill)
-            .center_x()
-            .center_y()
-            .into()
+    pub fn view(&self) -> Element<Message> {
+        self.screen.view().map(|msg| match msg {
+            ScreenMessage::ScreenMessage(msg) => msg,
+            ScreenMessage::ParentMessage(_) => unreachable!(), // Handle parent messages if needed
+        })
     }
 
-    fn theme(&self) -> Theme {
+    pub fn theme(&self) -> Theme {
         Theme::Dark
+    }
+}
+
+impl Default for AddrslipsApp {
+    fn default() -> Self {
+        Self {
+            state: AppState::default(),
+            screen: ScreenData::LandingPage(super::screens::landing_page::LandingPageScreen),
+        }
     }
 }

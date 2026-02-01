@@ -30,3 +30,7 @@ edge_test/
 # OS
 .DS_Store
 Thumbs.db
+
+# misc
+db.db
+.env

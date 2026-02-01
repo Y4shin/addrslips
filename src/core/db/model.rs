@@ -1,65 +1,30 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Point {
     pub x: u32,
     pub y: u32,
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
-pub struct Address {
-    pub id: Uuid,
-    pub house_number: String,
-    pub position: Point,
-    pub confidence: u8,
-    pub verified: bool,
-    pub estimated_flats: Option<u16>,
-    pub assigned_street_id: Option<Uuid>,
-}
-
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
-pub struct Street {
-    pub id: Uuid,
-    pub name: Option<String>,
-    pub polyline: Vec<Point>,
-    pub verified: bool,
-    pub area_id: Uuid,
-}
-
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
-pub struct Team {
-    pub id: Uuid,
-    pub number: u16,
-    pub assigned_addresses: Vec<Uuid>,
-    pub total_flats: u32,
-    pub boundary: Option<Vec<Point>>,
-}
-
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
-pub struct Area {
-    pub id: Uuid,
-    pub name: String,
-    pub color: AreaColor,
-    pub state: AreaState,
-}
-
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
-pub struct AreaColor {
+#[derive(Debug, Clone, Copy)]
+pub struct Color {
     pub r: u8,
     pub g: u8,
     pub b: u8,
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone, Copy)]
-pub enum AreaState {
-    Imported,
-    AddressesDetected,
-    AddressesCorrected,
-    StreetsDetected,
-    StreetsCorrected,
-    AddressesAssigned,
-    FlatsEstimated,
-    TeamsAssigned,
-    Complete,
+impl TryFrom<i64> for Color {
+    type Error = anyhow::Error;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        let r = ((value >> 16) & 0xFF) as u8;
+        let g = ((value >> 8) & 0xFF) as u8;
+        let b = (value & 0xFF) as u8;
+        Ok(Color { r, g, b })
+    }
+}
+
+
+impl From<Color> for i64 {
+    fn from(color: Color) -> Self {
+        ((color.r as i64) << 16) | ((color.g as i64) << 8) | (color.b as i64)
+    }
 }
