@@ -1,9 +1,13 @@
 [package]
 name = "addrslips"
 version = "0.1.0"
-edition = "2024"
+authors = ["Patric Plattner <patric@patricplattner.de>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+dioxus = { version = "0.7.1", features = ["router"] }
 clap = { version = "4.5", features = ["derive"] }
 image = "0.25"
 imageproc = "0.25"
@@ -19,20 +23,16 @@ tempdir = "0.3.7"
 tar = "0.4"
 zstd = "0.13"
 time = { version="0.3", features = ["formatting", "parsing", "local-offset"] }
-
-# GUI Framework (optional)
-iced = { version = "0.14", features = ["canvas", "image", "tokio"], optional = true }
-iced_aw = { version = "0.13", optional = true }
-
-# File Dialogs (optional)
-rfd = { version = "0.14", optional = true }
-iced_core = "0.14.0"
-iced_widget = "0.14.2"
+urlencoding = "2.1"
+rfd = "0.15"
+regex = { version = "1.12.3" }
+lazy_static = "1.5"
 
 [dev-dependencies]
-tokio = { version = "1.49", features = ["test-util", "rt-multi-thread", "macros"] }
-tempfile = "3.8"
+tempfile = "*"
 
 [features]
-default = ["gui"]
-gui = ["iced", "iced_aw", "rfd"]
+default = ["desktop"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]

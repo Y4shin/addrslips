@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{future::Future, path::PathBuf, sync::Arc};
 
 use image::DynamicImage;
 
@@ -47,10 +47,10 @@ pub trait BoundAreaRepository: TeamRepository + StreetRepository + AddressReposi
     fn delete(self) -> impl Future<Output = anyhow::Result<()>>;
 }
 
-pub trait AreaRepository {
-    type Repository<'a>: BoundAreaRepository where Self: 'a;
-    fn get_area_repo<'a>(&'a self, id: i64) -> impl Future<Output = anyhow::Result<Self::Repository<'a>>> + 'a;
-    fn add_area<'a>(&'a self, area: NewArea) -> impl Future<Output = anyhow::Result<Self::Repository<'a>>> + 'a;
+pub trait AreaRepository: 'static {
+    type Repository: BoundAreaRepository where Self: 'static;
+    fn get_area_repo(&self, id: i64) -> impl Future<Output = anyhow::Result<Self::Repository>> + 'static;
+    fn add_area(&self, area: NewArea) -> impl Future<Output = anyhow::Result<Self::Repository>>;
     fn get_areas(&self) -> impl Future<Output = anyhow::Result<Vec<Area>>>;
 }
 

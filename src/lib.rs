@@ -10,7 +10,4 @@ pub use pipeline::{
     BoundingBox, MetadataValue, WorkItem, PipelineExecutor, DebugConfig
 };
 
-#[cfg(feature = "gui")]
-pub mod gui;
-
 // pub mod core;  // Will be created in Phase 2

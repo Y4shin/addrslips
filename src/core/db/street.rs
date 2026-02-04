@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use crate::core::db::model::Point;
 
 #[derive(Debug, Clone)]

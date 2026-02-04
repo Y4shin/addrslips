@@ -6,7 +6,7 @@ mod state;
 mod street;
 mod team;
 
-use std::path::Path;
+use std::{ops::Deref, path::Path, sync::Arc};
 
 use anyhow::Ok;
 use image::DynamicImage;
@@ -23,13 +23,13 @@ pub use team::{Team, TeamAddress, TeamBounds, TeamRepository};
 
 #[derive(Debug)]
 pub struct ProjectDb {
-    state: ProjectState,
+    state: Arc<ProjectState>,
 }
 
 impl ProjectDb {
     pub async fn new<P: AsRef<Path>>(project_file: P) -> anyhow::Result<Self> {
         Ok(Self {
-            state: ProjectState::new(project_file).await?,
+            state: Arc::new(ProjectState::new(project_file).await?),
         })
     }
 
@@ -40,13 +40,13 @@ impl ProjectDb {
     }
 }
 
-pub struct AreaDb<'a> {
-    state: &'a ProjectState,
+pub struct AreaDb {
+    state: Arc<ProjectState>,
     area_id: i64,
     image: DynamicImage,
 }
 
-impl std::fmt::Debug for AreaDb<'_> {
+impl std::fmt::Debug for AreaDb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AreaDb")
             .field("area_id", &self.area_id)
@@ -125,43 +125,55 @@ impl ProjectRepository for ProjectDb {
 }
 
 impl AreaRepository for ProjectDb {
-    type Repository<'a> = AreaDb<'a>;
+    type Repository = AreaDb;
 
-    async fn get_area_repo<'a>(&'a self, id: i64) -> anyhow::Result<Self::Repository<'a>> {
-        let mut conn = self.state.conn().await?;
-        let image_fname = sqlx::query!("SELECT image_fname FROM area WHERE id = $1", id)
-            .fetch_one(&mut **conn)
-            .await?
-            .image_fname;
-        let image = self.state.load_area_image(&image_fname).await?;
-        Ok(AreaDb {
-            state: &self.state,
-            area_id: id,
-            image,
-        })
+    fn get_area_repo(
+        &self,
+        id: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<Self::Repository>> + 'static {
+        let state = self.state.clone();
+        async move {
+            let mut conn = state.conn().await?;
+            let image_fname = sqlx::query!("SELECT image_fname FROM area WHERE id = $1", id)
+                .fetch_one(&mut **conn)
+                .await?
+                .image_fname;
+            let image = state.load_area_image(&image_fname).await?;
+            Ok(AreaDb {
+                state: state.clone(),
+                area_id: id,
+                image,
+            })
+        }
     }
 
-    async fn add_area<'a>(&'a self, area: NewArea) -> anyhow::Result<Self::Repository<'a>> {
-        let mut conn = self.state.conn().await?;
-        let image_fname = self.state.store_area_image(&area.image_path).await?;
-        let color_int = i64::from(area.color);
-        let initial_state = i64::from(AreaState::Imported);
-        let area_id = sqlx::query!(
-            "INSERT INTO area (name, color, image_fname, state) VALUES ($1, $2, $3, $4) RETURNING id",
-            area.name,
-            color_int,
-            image_fname,
-            initial_state
-        )
-        .fetch_one(&mut **conn)
-        .await?
-        .id;
-        let image = self.state.load_area_image(&image_fname).await?;
-        Ok(AreaDb {
-            state: &self.state,
-            area_id,
-            image,
-        })
+    fn add_area(
+        &self,
+        area: NewArea,
+    ) -> impl std::future::Future<Output = anyhow::Result<Self::Repository>> + 'static {
+        let state = self.state.clone();
+        async move {
+            let mut conn = state.conn().await?;
+            let image_fname = state.store_area_image(&area.image_path).await?;
+            let color_int = i64::from(area.color);
+            let initial_state = i64::from(AreaState::Imported);
+            let area_id = sqlx::query!(
+                "INSERT INTO area (name, color, image_fname, state) VALUES ($1, $2, $3, $4) RETURNING id",
+                area.name,
+                color_int,
+                image_fname,
+                initial_state
+            )
+            .fetch_one(&mut **conn)
+            .await?
+            .id;
+            let image = state.load_area_image(&image_fname).await?;
+            Ok(AreaDb {
+                state: state.clone(),
+                area_id,
+                image,
+            })
+        }
     }
 
     async fn get_areas(&self) -> anyhow::Result<Vec<Area>> {
@@ -185,7 +197,7 @@ impl AreaRepository for ProjectDb {
     }
 }
 
-impl<'a> TeamRepository for AreaDb<'a> {
+impl TeamRepository for AreaDb {
     async fn get_teams(&self) -> anyhow::Result<Vec<Team>> {
         let mut conn = self.state.conn().await?;
         Ok(sqlx::query!(
@@ -402,7 +414,7 @@ impl<'a> TeamRepository for AreaDb<'a> {
     }
 }
 
-impl<'a> AddressRepository for AreaDb<'a> {
+impl AddressRepository for AreaDb {
     async fn get_addresses(&self) -> anyhow::Result<Vec<Address>> {
         let mut conn = self.state.conn().await?;
         Ok(sqlx::query!(
@@ -684,7 +696,7 @@ impl<'a> AddressRepository for AreaDb<'a> {
     }
 }
 
-impl<'a> StreetRepository for AreaDb<'a> {
+impl StreetRepository for AreaDb {
     async fn get_streets(&self) -> anyhow::Result<Vec<Street>> {
         let mut conn = self.state.conn().await?;
         Ok(sqlx::query!(
@@ -852,7 +864,7 @@ impl<'a> StreetRepository for AreaDb<'a> {
     }
 }
 
-impl<'a> BoundAreaRepository for AreaDb<'a> {
+impl BoundAreaRepository for AreaDb {
     async fn get_area(&self) -> anyhow::Result<Area> {
         let mut conn = self.state.conn().await?;
         if let Some(record) = sqlx::query!(
